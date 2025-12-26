@@ -1,0 +1,417 @@
+## routes.js
+```javascript
+import { createCheerioRouter } from 'crawlee';
+import { extractInformation, findRelatedLinks, analyzeContent } from './utils.js';
+
+export const router = createCheerioRouter();
+
+router.addDefaultHandler(async ({ $, request, crawler, log }) => {
+    const { userData } = request;
+    const url = request.loadedUrl;
+    
+    log.info(`🔍 Investigating: ${url}`);
+
+    try {
+        // Extract basic page information
+        const title = $('title').text().trim();
+        const description = $('meta[name="description"]').attr('content') || '';
+        const keywords = $('meta[name="keywords"]').attr('content') || '';
+        
+        // Extract all text content
+        const textContent = $('body').text().replace(/\s+/g, ' ').trim();
+        
+        // Perform investigation based on type
+        const investigation = await performInvestigation($, textContent, userData);
+        
+        // Extract contact information
+        const contacts = extractContactInfo(textContent, userData);
+        
+        // Find social media links
+        const socialLinks = extractSocialLinks($, userData.extractSocialLinks);
+        
+        // Analyze content for search terms
+        const searchResults = analyzeSearchTerms(textContent, userData.searchTerms || []);
+        
+        // Extract structured data
+        const structuredData = extractStructuredData($);
+        
+        // Compile investigation results
+        const result = {
+            url,
+            timestamp: new Date().toISOString(),
+            investigationType: userData.investigationType,
+            basicInfo: {
+                title,
+                description,
+                keywords,
+                wordCount: textContent.split(' ').length
+            },
+            investigation,
+            contacts,
+            socialLinks,
+            searchResults,
+            structuredData,
+            suspiciousIndicators: findSuspiciousIndicators(textContent, $),
+            metadata: extractMetadata($)
+        };
+
+        // Save results
+        await crawler.exportData(result);
+
+        // Find and queue related URLs if deep scan is enabled
+        if (userData.deepScan) {
+            const relatedUrls = findRelatedLinks($, url, userData);
+            if (relatedUrls.length > 0) {
+                log.info(`🔗 Found ${relatedUrls.length} related URLs for deep scan`);
+                await crawler.addRequests(relatedUrls.map(relatedUrl => ({
+                    url: relatedUrl,
+                    userData: { ...userData, depth: (userData.depth || 0) + 1 }
+                })));
+            }
+        }
+
+    } catch (error) {
+        log.error(`❌ Error investigating ${url}:`, error);
+        await crawler.exportData({
+            url,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+async function performInvestigation($, textContent, userData) {
+    const investigation = {};
+    
+    switch (userData.investigationType) {
+        case 'company':
+            investigation.companyInfo = extractCompanyInfo($, textContent);
+            break;
+        case 'person':
+            investigation.personInfo = extractPersonInfo($, textContent);
+            break;
+        case 'news':
+            investigation.newsInfo = extractNewsInfo($, textContent);
+            break;
+        case 'social':
+            investigation.socialInfo = extractSocialMediaInfo($, textContent);
+            break;
+        default:
+            investigation.generalInfo = extractGeneralInfo($, textContent);
+    }
+    
+    return investigation;
+}
+
+function extractContactInfo(textContent, userData) {
+    const contacts = {};
+    
+    if (userData.extractEmails) {
+        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+        contacts.emails = [...new Set(textContent.match(emailRegex) || [])];
+    }
+    
+    if (userData.extractPhones) {
+        const phoneRegex = /(\+?1?[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/g;
+        contacts.phones = [...new Set(textContent.match(phoneRegex) || [])];
+    }
+    
+    return contacts;
+}
+
+function extractSocialLinks($, extractSocialLinks) {
+    if (!extractSocialLinks) return [];
+    
+    const socialDomains = [
+        'facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com',
+        'youtube.com', 'tiktok.com', 'snapchat.com', 'pinterest.com',
+        'reddit.com', 'telegram.org', 'whatsapp.com'
+    ];
+    
+    const socialLinks = [];
+    
+    $('a[href]').each((_, element) => {
+        const href = $(element).attr('href');
+        if (href && socialDomains.some(domain => href.includes(domain))) {
+            socialLinks.push({
+                platform: socialDomains.find(domain => href.includes(domain)),
+                url: href,
+                text: $(element).text().trim()
+            });
+        }
+    });
+    
+    return socialLinks;
+}
+
+function analyzeSearchTerms(textContent, searchTerms) {
+    const results = [];
+    
+    searchTerms.forEach(term => {
+        const regex = new RegExp(term, 'gi');
+        const matches = textContent.match(regex) || [];
+        if (matches.length > 0) {
+            results.push({
+                term,
+                count: matches.length,
+                contexts: extractContexts(textContent, term)
+            });
+        }
+    });
+    
+    return results;
+}
+
+function extractContexts(text, term, contextLength = 100) {
+    const regex = new RegExp(`.{0,${contextLength}}${term}.{0,${contextLength}}`, 'gi');
+    return text.match(regex) || [];
+}
+
+function extractStructuredData($) {
+    const structuredData = [];
+    
+    $('script[type="application/ld+json"]').each((_, element) => {
+        try {
+            const data = JSON.parse($(element).html());
+            structuredData.push(data);
+        } catch (e) {
+            // Invalid JSON, skip
+        }
+    });
+    
+    return structuredData;
+}
+
+function findSuspiciousIndicators(textContent, $) {
+    const indicators = [];
+    
+    // Check for suspicious keywords
+    const suspiciousKeywords = [
+        'scam', 'fraud', 'fake', 'phishing', 'malware', 'virus',
+        'urgent', 'act now', 'limited time', 'guaranteed'
+    ];
+    
+    suspiciousKeywords.forEach(keyword => {
+        if (textContent.toLowerCase().includes(keyword)) {
+            indicators.push({
+                type: 'suspicious_keyword',
+                value: keyword,
+                severity: 'medium'
+            });
+        }
+    });
+    
+    // Check for suspicious URL patterns
+    const currentUrl = window.location?.href || '';
+    if (currentUrl.includes('bit.ly') || currentUrl.includes('tinyurl')) {
+        indicators.push({
+            type: 'shortened_url',
+            value: currentUrl,
+            severity: 'low'
+        });
+    }
+    
+    return indicators;
+}
+
+function extractMetadata($) {
+    const metadata = {};
+    
+    // Extract Open Graph data
+    $('meta[property^="og:"]').each((_, element) => {
+        const property = $(element).attr('property');
+        const content = $(element).attr('content');
+        if (property && content) {
+            metadata[property] = content;
+        }
+    });
+    
+    // Extract Twitter Card data
+    $('meta[name^="twitter:"]').each((_, element) => {
+        const name = $(element).attr('name');
+        const content = $(element).attr('content');
+        if (name && content) {
+            metadata[name] = content;
+        }
+    });
+    
+    return metadata;
+}
+
+function extractCompanyInfo($, textContent) {
+    return {
+        addresses: extractAddresses(textContent),
+        businessHours: extractBusinessHours(textContent),
+        services: extractServices($),
+        team: extractTeamMembers($)
+    };
+}
+
+function extractPersonInfo($, textContent) {
+    return {
+        mentions: extractPersonMentions(textContent),
+        achievements: extractAchievements($),
+        affiliations: extractAffiliations(textContent)
+    };
+}
+
+function extractNewsInfo($, textContent) {
+    return {
+        publishDate: $('meta[property="article:published_time"]').attr('content') ||
+                    $('time').attr('datetime'),
+        author: $('meta[name="author"]').attr('content') ||
+                $('.author').text().trim(),
+        category: $('meta[property="article:section"]').attr('content'),
+        tags: extractTags($)
+    };
+}
+
+function extractSocialMediaInfo($, textContent) {
+    return {
+        followers: extractFollowerCount(textContent),
+        posts: extractPostCount(textContent),
+        engagement: extractEngagementMetrics($)
+    };
+}
+
+function extractGeneralInfo($, textContent) {
+    return {
+        headings: extractHeadings($),
+        images: extractImages($),
+        links: extractExternalLinks($),
+        forms: extractForms($)
+    };
+}
+
+// Helper functions
+function extractAddresses(text) {
+    const addressRegex = /\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl)/gi;
+    return text.match(addressRegex) || [];
+}
+
+function extractBusinessHours(text) {
+    const hoursRegex = /(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday).*?\d{1,2}:\d{2}.*?(?:am|pm)/gi;
+    return text.match(hoursRegex) || [];
+}
+
+function extractServices($) {
+    const services = [];
+    $('ul li, .service, .product').each((_, element) => {
+        const text = $(element).text().trim();
+        if (text.length > 5 && text.length < 100) {
+            services.push(text);
+        }
+    });
+    return services.slice(0, 20); // Limit results
+}
+
+function extractTeamMembers($) {
+    const team = [];
+    $('.team-member, .staff, .employee').each((_, element) => {
+        team.push({
+            name: $(element).find('.name, h3, h4').text().trim(),
+            title: $(element).find('.title, .position').text().trim(),
+            bio: $(element).find('.bio, .description').text().trim()
+        });
+    });
+    return team;
+}
+
+function extractPersonMentions(text) {
+    // Simple name extraction (this could be improved with NLP)
+    const nameRegex = /\b[A-Z][a-z]+ [A-Z][a-z]+\b/g;
+    return [...new Set(text.match(nameRegex) || [])].slice(0, 10);
+}
+
+function extractAchievements($) {
+    const achievements = [];
+    $('.achievement, .award, .certification').each((_, element) => {
+        achievements.push($(element).text().trim());
+    });
+    return achievements;
+}
+
+function extractAffiliations(text) {
+    const orgRegex = /\b(?:University|College|Corporation|Inc|LLC|Ltd|Company|Organization)\b/gi;
+    return [...new Set(text.match(orgRegex) || [])];
+}
+
+function extractTags($) {
+    const tags = [];
+    $('.tag, .category, .keyword').each((_, element) => {
+        tags.push($(element).text().trim());
+    });
+    return tags;
+}
+
+function extractFollowerCount(text) {
+    const followerRegex = /(\d+(?:,\d+)*)\s*(?:followers|following)/gi;
+    const matches = text.match(followerRegex);
+    return matches ? matches[0] : null;
+}
+
+function extractPostCount(text) {
+    const postRegex = /(\d+(?:,\d+)*)\s*(?:posts|tweets|updates)/gi;
+    const matches = text.match(postRegex);
+    return matches ? matches[0] : null;
+}
+
+function extractEngagementMetrics($) {
+    const metrics = {};
+    $('.likes, .shares, .comments').each((_, element) => {
+        const text = $(element).text();
+        const number = text.match(/\d+/);
+        if (number) {
+            const type = $(element).attr('class');
+            metrics[type] = parseInt(number[0]);
+        }
+    });
+    return metrics;
+}
+
+function extractHeadings($) {
+    const headings = [];
+    $('h1, h2, h3, h4, h5, h6').each((_, element) => {
+        headings.push({
+            level: element.tagName.toLowerCase(),
+            text: $(element).text().trim()
+        });
+    });
+    return headings;
+}
+
+function extractImages($) {
+    const images = [];
+    $('img').each((_, element) => {
+        images.push({
+            src: $(element).attr('src'),
+            alt: $(element).attr('alt'),
+            title: $(element).attr('title')
+        });
+    });
+    return images.slice(0, 10); // Limit results
+}
+
+function extractExternalLinks($) {
+    const links = [];
+    $('a[href^="http"]').each((_, element) => {
+        const href = $(element).attr('href');
+        if (!href.includes(window.location?.hostname || '')) {
+            links.push({
+                url: href,
+                text: $(element).text().trim()
+            });
+        }
+    });
+    return links.slice(0, 20); // Limit results
+}
+
+function extractForms($) {
+    const forms = [];
+    $('form').each((_, element) => {
+        const inputs = [];
+        $(element).find('input, textarea, select').each((_, input) => {
+            inputs.push({
+                type: $(input).attr('type') || $(input)[0].tagName.toLowerCase(),
+                name: $(input).attr('name'),
+                placeholder: $(input).attr('placeholder')
