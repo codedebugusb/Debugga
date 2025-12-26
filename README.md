@@ -80,3 +80,27 @@ const client = new ApifyClient({
     "required": ["startUrls"]
 }
 ```
+import { ApifyClient } from 'apify-client';
+
+// Initialize the ApifyClient with API token
+const client = new ApifyClient({
+    token: '<YOUR_API_TOKEN>',
+});
+
+// Prepare Actor input
+const input = {
+    "helloWorld": 123
+};
+
+(async () => {
+    // Run the Actor and wait for it to finish
+    const run = await client.actor("nCoCzy8GS06IBvoS0").call(input);
+
+    // Fetch and print Actor results from the run's dataset (if any)
+    console.log('Results from dataset');
+    const { items } = await client.dataset(run.defaultDatasetId).listItems();
+    items.forEach((item) => {
+        console.dir(item);
+    });
+})();
+
