@@ -1,0 +1,63 @@
+## INPUT_SCHEMA.json
+```json
+{
+    "title": "Investigator Actor Input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrls": {
+            "title": "Start URLs",
+            "type": "array",
+            "description": "URLs to investigate",
+            "editor": "requestListSources",
+            "default": ["https://example.com"]
+        },
+        "searchTerms": {
+            "title": "Search Terms",
+            "type": "array",
+            "description": "Specific terms to search for",
+            "editor": "stringList",
+            "default": []
+        },
+        "investigationType": {
+            "title": "Investigation Type",
+            "type": "string",
+            "description": "Type of investigation to perform",
+            "enum": ["general", "company", "person", "news"],
+            "default": "general"
+        },
+        "maxRequestsPerCrawl": {
+            "title": "Max Requests",
+            "type": "integer",
+            "description": "Maximum number of pages to crawl",
+            "default": 10,
+            "minimum": 1
+        },
+        "extractEmails": {
+            "title": "Extract Emails",
+            "type": "boolean",
+            "description": "Extract email addresses",
+            "default": true
+        },
+        "extractPhones": {
+            "title": "Extract Phone Numbers",
+            "type": "boolean",
+            "description": "Extract phone numbers",
+            "default": true
+        },
+        "extractSocialLinks": {
+            "title": "Extract Social Media Links",
+            "type": "boolean",
+            "description": "Extract social media links",
+            "default": true
+        },
+        "deepScan": {
+            "title": "Deep Scan",
+            "type": "boolean",
+            "description": "Follow links to related pages",
+            "default": false
+        }
+    },
+    "required": ["startUrls"]
+}
+```
