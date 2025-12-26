@@ -58,3 +58,243 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+## package.json
+```json
+{
+    "name": "investigator-actor",
+    "version": "1.0.0",
+    "description": "An actor for investigating and extracting information from websites",
+    "main": "main.js",
+    "type": "module",
+    "dependencies": {
+        "apify": "^3.5.2",
+        "crawlee": "^3.15.3"
+    },
+    "scripts": {
+        "start": "node main.js"
+    }
+}
+```
+
+## main.js (Fixed and Ready)
+```javascript
+import { Actor } from 'apify';
+import { CheerioCrawler } from 'crawlee';
+
+await Actor.init();
+
+const input = await Actor.getInput() ?? {};
+const {
+    startUrls = ['https://example.com'],
+    searchTerms = [],
+    maxRequestsPerCrawl = 10,
+    investigationType = 'general',
+    extractEmails = true,
+    extractPhones = true,
+    extractSocialLinks = true,
+    deepScan = false
+} = input;
+
+console.log('🔍 Investigator Actor Starting...');
+console.log(`Investigation Type: ${investigationType}`);
+console.log(`Search Terms: ${searchTerms.join(', ')}`);
+console.log(`Max Requests: ${maxRequestsPerCrawl}`);
+
+const crawler = new CheerioCrawler({
+    maxRequestsPerCrawl,
+    maxConcurrency: 2,
+    requestHandlerTimeoutSecs: 60,
+    
+    async requestHandler({ $, request, crawler, log }) {
+        const url = request.loadedUrl;
+        log.info(`🔍 Investigating: ${url}`);
+
+        try {
+            // Extract basic information
+            const title = $('title').text().trim();
+            const description = $('meta[name="description"]').attr('content') || '';
+            const textContent = $('body').text().replace(/\s+/g, ' ').trim();
+
+            // Extract contact information
+            const contacts = {};
+            
+            if (extractEmails) {
+                const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+                contacts.emails = [...new Set(textContent.match(emailRegex) || [])];
+            }
+            
+            if (extractPhones) {
+                const phoneRegex = /(\+?1?[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/g;
+                contacts.phones = [...new Set(textContent.match(phoneRegex) || [])];
+            }
+
+            // Extract social media links
+            const socialLinks = [];
+            if (extractSocialLinks) {
+                const socialDomains = ['facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com', 'youtube.com'];
+                
+                $('a[href]').each((_, element) => {
+                    const href = $(element).attr('href');
+                    if (href && socialDomains.some(domain => href.includes(domain))) {
+                        socialLinks.push({
+                            platform: socialDomains.find(domain => href.includes(domain)),
+                            url: href,
+                            text: $(element).text().trim()
+                        });
+                    }
+                });
+            }
+
+            // Search for specific terms
+            const searchResults = [];
+            searchTerms.forEach(term => {
+                const regex = new RegExp(term, 'gi');
+                const matches = textContent.match(regex) || [];
+                if (matches.length > 0) {
+                    searchResults.push({
+                        term,
+                        count: matches.length,
+                        found: true
+                    });
+                }
+            });
+
+            // Extract headings
+            const headings = [];
+            $('h1, h2, h3').each((_, element) => {
+                headings.push({
+                    level: element.tagName.toLowerCase(),
+                    text: $(element).text().trim()
+                });
+            });
+
+            // Investigation based on type
+            let specificData = {};
+            
+            switch (investigationType) {
+                case 'company':
+                    specificData = {
+                        addresses: extractAddresses(textContent),
+                        businessInfo: extractBusinessInfo($)
+                    };
+                    break;
+                case 'person':
+                    specificData = {
+                        mentions: extractPersonMentions(textContent)
+                    };
+                    break;
+                case 'news':
+                    specificData = {
+                        publishDate: $('meta[property="article:published_time"]').attr('content'),
+                        author: $('meta[name="author"]').attr('content')
+                    };
+                    break;
+            }
+
+            // Compile results
+            const result = {
+                url,
+                timestamp: new Date().toISOString(),
+                investigationType,
+                basicInfo: {
+                    title,
+                    description,
+                    wordCount: textContent.split(' ').length
+                },
+                contacts,
+                socialLinks,
+                searchResults,
+                headings: headings.slice(0, 10),
+                specificData,
+                suspiciousIndicators: findSuspiciousContent(textContent)
+            };
+
+            // Save results
+            await Actor.pushData(result);
+            log.info(`✅ Investigation completed for: ${url}`);
+
+            // Add related URLs if deep scan enabled
+            if (deepScan) {
+                const relatedUrls = [];
+                $('a[href]').each((_, element) => {
+                    const href = $(element).attr('href');
+                    if (href && href.startsWith('http') && !href.includes(new URL(url).hostname)) {
+                        relatedUrls.push(href);
+                    }
+                });
+
+                if (relatedUrls.length > 0) {
+                    const limitedUrls = relatedUrls.slice(0, 3); // Limit to prevent infinite crawling
+                    await crawler.addRequests(limitedUrls);
+                    log.info(`🔗 Added ${limitedUrls.length} related URLs`);
+                }
+            }
+
+        } catch (error) {
+            log.error(`❌ Error investigating ${url}:`, error);
+            await Actor.pushData({
+                url,
+                error: error.message,
+                timestamp: new Date().toISOString()
+            });
+        }
+    }
+});
+
+// Helper functions
+function extractAddresses(text) {
+    const addressRegex = /\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)/gi;
+    return text.match(addressRegex) || [];
+}
+
+function extractBusinessInfo($) {
+    const info = {};
+    
+    // Extract business hours
+    const hoursText = $('.hours, .business-hours, .opening-hours').text();
+    if (hoursText) {
+        info.hours = hoursText.trim();
+    }
+    
+    // Extract services
+    const services = [];
+    $('.service, .services li').each((_, element) => {
+        services.push($(element).text().trim());
+    });
+    info.services = services.slice(0, 10);
+    
+    return info;
+}
+
+function extractPersonMentions(text) {
+    const nameRegex = /\b[A-Z][a-z]+ [A-Z][a-z]+\b/g;
+    return [...new Set(text.match(nameRegex) || [])].slice(0, 10);
+}
+
+function findSuspiciousContent(text) {
+    const indicators = [];
+    const suspiciousWords = ['scam', 'fraud', 'urgent', 'act now', 'limited time'];
+    
+    suspiciousWords.forEach(word => {
+        if (text.toLowerCase().includes(word)) {
+            indicators.push({
+                type: 'suspicious_keyword',
+                value: word
+            });
+        }
+    });
+    
+    return indicators;
+}
+
+// Add start URLs to crawler
+await crawler.addRequests(startUrls);
+
+// Run the crawler
+await crawler.run();
+
+console.log('🎯 Investigation completed! Check the dataset for results.');
+await Actor.exit();
+```
+
