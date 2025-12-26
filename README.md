@@ -89,7 +89,7 @@ const client = new ApifyClient({
 
 // Prepare Actor input
 const input = {
-    "helloWorld": 123
+    "idealistic_martian/Debugga".
 };
 
 (async () => {
